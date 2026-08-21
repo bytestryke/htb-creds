@@ -2,6 +2,9 @@
 
 import argparse
 import json
+import os
+import pwd
+import shutil
 import sys
 from pathlib import Path
 
@@ -10,6 +13,7 @@ CONFIG_DIR = BASE_DIR / "configs"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 LOOT_DIR = BASE_DIR / "loot"
 CREDS_FILENAME = "htb_creds.json"
+INSTALLED_BINARY = Path("/usr/local/bin/htb-creds")
 
 FIELDS = [
     "host",
@@ -46,15 +50,6 @@ def load_config():
     except (json.JSONDecodeError, OSError):
         print(f"[-] Unable to read config: {CONFIG_FILE}")
         sys.exit(1)
-
-    # Migrate old single-directory config format
-    if "engagements" not in config:
-        old_directory = config.get("directory")
-        config = {"current": None, "engagements": {}}
-
-        if old_directory:
-            config["engagements"]["default"] = old_directory
-            config["current"] = "default"
 
     return config
 
@@ -342,6 +337,49 @@ def show_current():
     print(f"Credential file: {creds_file}")
 
 
+def resolve_target_user():
+    sudo_user = os.environ.get("SUDO_USER")
+
+    if sudo_user and sudo_user != "root":
+        try:
+            return pwd.getpwnam(sudo_user)
+        except KeyError:
+            pass
+
+    return pwd.getpwuid(os.getuid())
+
+
+def uninstall():
+    if os.geteuid() != 0:
+        print("[-] Uninstalling requires root privileges.")
+        print("    Re-run with sudo:")
+        print("    sudo htb-creds --uninstall")
+        sys.exit(1)
+
+    user = resolve_target_user()
+    base_dir = Path(user.pw_dir) / "htb-creds"
+
+    print("[!] This will permanently delete:")
+    print(f"    {base_dir} (all engagements and stored credentials)")
+    print(f"    {INSTALLED_BINARY}")
+
+    answer = input("Uninstall htb-creds? [y/N] ").strip().lower()
+
+    if answer != "y":
+        print("[*] Uninstall cancelled.")
+        return
+
+    if base_dir.exists():
+        shutil.rmtree(base_dir)
+        print(f"[+] Removed {base_dir}")
+
+    if INSTALLED_BINARY.exists():
+        INSTALLED_BINARY.unlink()
+        print(f"[+] Removed {INSTALLED_BINARY}")
+
+    print("[+] htb-creds has been uninstalled.")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Simple HTB credential manager"
@@ -396,6 +434,12 @@ def main():
         help="List all configured engagements",
     )
 
+    parser.add_argument(
+        "--uninstall",
+        action="store_true",
+        help="Remove htb-creds and all stored engagements/credentials",
+    )
+
     subparsers = parser.add_subparsers(dest="command")
 
     setup_parser = subparsers.add_parser(
@@ -430,7 +474,10 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "setup":
+    if args.uninstall:
+        uninstall()
+
+    elif args.command == "setup":
         setup(args.name, args.directory)
 
     elif args.command == "use":

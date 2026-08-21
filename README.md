@@ -32,3 +32,8 @@ htb-creds --options
 ```
 
 Credentials for the current engagement are stored as `htb_creds.json` inside that engagement's directory. Passing a `[directory]` to `setup` points the engagement at an existing directory outside `~/htb-creds/loot` instead.
+
+##DISCLAIMER: 
+This project is mainly vibecoded. However, if it works, it works, and it's free. The project simply seeks to enable quick credential management when working on Hack The Box, TryHackMe, general CTFs, or maybe even more daunting things like OSCP. 
+
+I put this together since I was tired of manually moving credentials back and forth between my Kali VM and note-taking platforms like Joplin.
