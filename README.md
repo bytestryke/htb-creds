@@ -21,6 +21,7 @@ This copies `htb-creds.py` to `/usr/local/bin/htb-creds` (executable), making `h
 htb-creds setup <name> [directory]   # register and switch to an engagement
                                       # omit [directory] to create one under ~/htb-creds/loot/<name>
 htb-creds use <name>                 # switch to a previously configured engagement
+htb-creds import <file> [options]    # import a raw creds JSON file as a (new or existing) engagement
 htb-creds --engagements              # list configured engagements
 htb-creds --current                  # show the currently selected engagement
 
@@ -32,6 +33,49 @@ htb-creds --options
 ```
 
 Credentials for the current engagement are stored as `htb_creds.json` inside that engagement's directory. Passing a `[directory]` to `setup` points the engagement at an existing directory outside `~/htb-creds/loot` instead.
+
+Each `htb_creds.json` is tagged with the engagement it belongs to:
+
+```json
+{
+    "engagement": "fluffy",
+    "credentials": [
+        {
+            "host": "",
+            "service": "",
+            "domain": "",
+            "username": "j.fleischman",
+            "password": "J0elTHEM4n1990!",
+            "hash": "",
+            "notes": ""
+        }
+    ]
+}
+```
+
+Older files stored as a bare list are still read fine, and get upgraded to the tagged format the next time a credential is added, edited, or removed.
+
+### Importing a raw JSON file
+
+`use <name>` only switches between engagements you've already registered — it doesn't know what to do with an arbitrary file. To pull in credentials you (or another tool) already dumped to a JSON file, use `import` instead:
+
+```
+htb-creds import ~/HTB-boxes/creds/fluffy/htb_creds.json
+```
+
+The file can be either a bare list of credential objects, or a tagged object like the one above. `import` will:
+
+- Register the file's directory as an engagement, choosing the name from (in order): `--engagement`/`-n`, the file's own `"engagement"` field, or the file's parent directory name (`fluffy`, above).
+- Merge the file's credentials into that engagement's `htb_creds.json`, skipping exact duplicates — safe to re-run on the same file.
+- Switch to the newly imported engagement (pass `--no-switch` to import without changing your current engagement).
+
+Options:
+
+```
+htb-creds import <file> -n <engagement>   # override the inferred engagement name
+htb-creds import <file> -d <directory>    # manage the engagement from a different directory
+htb-creds import <file> --no-switch       # import without switching the current engagement
+```
 
 ##DISCLAIMER: 
 This project is mainly vibecoded. However, if it works, it works, and it's free. The project simply seeks to enable quick credential management when working on Hack The Box, TryHackMe, general CTFs, or maybe even more daunting things like OSCP. 

@@ -91,7 +91,7 @@ def setup(name, directory=None):
 
     if not creds_file.exists():
         with creds_file.open("w") as f:
-            json.dump([], f, indent=4)
+            json.dump({"engagement": engagement, "credentials": []}, f, indent=4)
 
     print(f"[+] Engagement '{engagement}' set to:")
     print(f"    {box_dir}")
@@ -105,7 +105,15 @@ def use_engagement(name):
 
     if name not in config["engagements"]:
         print(f"[-] Unknown engagement: {name}")
-        print("    Run 'htb-creds --engagements' to see configured engagements.")
+
+        looks_like_path = os.sep in name or name.lower().endswith(".json")
+
+        if looks_like_path or Path(name).expanduser().exists():
+            print("    That looks like a file, not an engagement name.")
+            print(f"    Run 'htb-creds import {name}' to import it instead.")
+        else:
+            print("    Run 'htb-creds --engagements' to see configured engagements.")
+
         sys.exit(1)
 
     config["current"] = name
@@ -129,6 +137,121 @@ def list_engagements():
     for engagement, directory in config["engagements"].items():
         marker = "*" if engagement == config["current"] else " "
         print(f"  {marker} {engagement:<20} {directory}")
+
+
+def load_raw_json(path):
+    try:
+        with path.open() as f:
+            return json.load(f)
+    except json.JSONDecodeError as exc:
+        print(f"[-] Invalid JSON in {path}: {exc}")
+        sys.exit(1)
+    except OSError as exc:
+        print(f"[-] Unable to read {path}: {exc}")
+        sys.exit(1)
+
+
+def extract_credentials(data, source):
+    """Pull an (engagement_hint, credentials_list) pair out of an arbitrary
+    creds JSON payload: either a bare list (legacy format) or a tagged
+    {"engagement": ..., "credentials": [...]} object."""
+    if isinstance(data, list):
+        return None, data
+
+    if isinstance(data, dict) and isinstance(data.get("credentials"), list):
+        return data.get("engagement"), data["credentials"]
+
+    print(f"[-] Unrecognized credential file format: {source}")
+    sys.exit(1)
+
+
+def normalize_credential(entry, source):
+    if not isinstance(entry, dict):
+        print(f"[-] Skipping non-object credential entry in {source}: {entry!r}")
+        return None
+
+    credential = {field: "" for field in FIELDS}
+
+    for key, value in entry.items():
+        field = ALIASES.get(str(key).lower().strip())
+
+        if field:
+            credential[field] = value
+
+    return credential
+
+
+def import_credentials(path_str, engagement_name=None, directory=None, switch=True):
+    source = Path(path_str).expanduser().resolve()
+
+    if not source.exists():
+        print(f"[-] File does not exist: {source}")
+        sys.exit(1)
+
+    if not source.is_file():
+        print(f"[-] Not a file: {source}")
+        sys.exit(1)
+
+    data = load_raw_json(source)
+    hint, incoming = extract_credentials(data, source)
+
+    engagement = (engagement_name or hint or source.parent.name).strip()
+
+    if not engagement:
+        print("[-] Could not determine an engagement name for this import.")
+        print("    Specify one with: htb-creds import <file> --engagement <name>")
+        sys.exit(1)
+
+    config = load_config()
+
+    if directory:
+        box_dir = Path(directory).expanduser().resolve()
+    elif engagement in config["engagements"]:
+        # Already-known engagement: keep merging into its configured directory
+        box_dir = Path(config["engagements"][engagement])
+    else:
+        # New engagement: manage the file where it already lives instead of
+        # copying it into ~/htb-creds/loot
+        box_dir = source.parent
+
+    box_dir.mkdir(parents=True, exist_ok=True)
+
+    config["engagements"][engagement] = str(box_dir)
+
+    if switch:
+        config["current"] = engagement
+
+    save_config(config)
+
+    creds_file = box_dir / CREDS_FILENAME
+    existing = []
+
+    if creds_file.exists() and creds_file != source:
+        existing_data = load_raw_json(creds_file)
+        _, existing = extract_credentials(existing_data, creds_file)
+
+    imported = 0
+
+    for entry in incoming:
+        credential = normalize_credential(entry, source)
+
+        if credential is None:
+            continue
+
+        if credential not in existing:
+            existing.append(credential)
+
+        imported += 1
+
+    with creds_file.open("w") as f:
+        json.dump({"engagement": engagement, "credentials": existing}, f, indent=4)
+
+    print(f"[+] Imported {imported} credential(s) from {source}")
+    print(f"[+] Engagement '{engagement}' -> {box_dir}")
+    print(f"[+] Credential file: {creds_file}")
+
+    if switch:
+        print(f"[+] Current engagement: {engagement}")
 
 
 def get_creds_file():
@@ -170,18 +293,27 @@ def load_creds():
         print(f"[-] Invalid JSON in {creds_file}")
         sys.exit(1)
 
-    if not isinstance(data, list):
-        print(f"[-] Invalid credential file format: {creds_file}")
-        sys.exit(1)
+    # Legacy files stored a bare list, with no record of which engagement
+    # they belonged to. New files are tagged: {"engagement": ..., "credentials": [...]}
+    if isinstance(data, list):
+        return data
 
-    return data
+    if isinstance(data, dict) and isinstance(data.get("credentials"), list):
+        return data["credentials"]
+
+    print(f"[-] Invalid credential file format: {creds_file}")
+    sys.exit(1)
 
 
 def save_creds(creds):
     creds_file = get_creds_file()
+    config = load_config()
+    engagement = config.get("current")
+
+    payload = {"engagement": engagement, "credentials": creds}
 
     with creds_file.open("w") as f:
-        json.dump(creds, f, indent=4)
+        json.dump(payload, f, indent=4)
 
 
 def parse_fields(arguments):
@@ -472,6 +604,47 @@ def main():
         help="Name of the engagement to switch to",
     )
 
+    import_parser = subparsers.add_parser(
+        "import",
+        help="Import credentials from a raw JSON file",
+    )
+
+    import_parser.add_argument(
+        "file",
+        help=(
+            "Path to a JSON credentials file: either a bare list of "
+            "credential objects, or an object with an 'engagement' name "
+            "and a 'credentials' list"
+        ),
+    )
+
+    import_parser.add_argument(
+        "-n",
+        "--engagement",
+        default=None,
+        help=(
+            "Engagement name to import into (defaults to the file's "
+            "'engagement' field, then its parent directory's name)"
+        ),
+    )
+
+    import_parser.add_argument(
+        "-d",
+        "--directory",
+        default=None,
+        help=(
+            "Directory to manage this engagement's credentials in "
+            "(defaults to the imported file's own directory, or an "
+            "existing engagement's configured directory)"
+        ),
+    )
+
+    import_parser.add_argument(
+        "--no-switch",
+        action="store_true",
+        help="Import without switching the current engagement",
+    )
+
     args = parser.parse_args()
 
     if args.uninstall:
@@ -482,6 +655,14 @@ def main():
 
     elif args.command == "use":
         use_engagement(args.name)
+
+    elif args.command == "import":
+        import_credentials(
+            args.file,
+            engagement_name=args.engagement,
+            directory=args.directory,
+            switch=not args.no_switch,
+        )
 
     elif args.add:
         add_credential(args.add)
