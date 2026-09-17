@@ -49,9 +49,8 @@ def main():
     user = resolve_target_user()
     base_dir = Path(user.pw_dir) / "htb-creds"
     configs_dir = base_dir / "configs"
-    loot_dir = base_dir / "loot"
 
-    for directory in (base_dir, configs_dir, loot_dir):
+    for directory in (base_dir, configs_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
         if os.getuid() == 0:
@@ -59,10 +58,11 @@ def main():
 
     print(f"[+] Created {base_dir}")
     print(f"    configs: {configs_dir}")
-    print(f"    loot:    {loot_dir}")
 
     print("[+] Run this to configure your first engagement:")
-    print("    htb-creds setup <name> [directory]")
+    print("    htb-creds setup <name> <parent_dir>")
+    print("    (parent_dir must be an absolute path; a subdirectory")
+    print("     named after the engagement is created inside it)")
 
 
 if __name__ == "__main__":

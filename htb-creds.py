@@ -11,7 +11,6 @@ from pathlib import Path
 BASE_DIR = Path.home() / "htb-creds"
 CONFIG_DIR = BASE_DIR / "configs"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-LOOT_DIR = BASE_DIR / "loot"
 CREDS_FILENAME = "htb_creds.json"
 INSTALLED_BINARY = Path("/usr/local/bin/htb-creds")
 
@@ -61,26 +60,39 @@ def save_config(config):
         json.dump(config, f, indent=4)
 
 
-def setup(name, directory=None):
+def resolve_engagement_dir(engagement, parent_dir):
+    """Resolve the per-engagement credentials folder from a REQUIRED,
+    absolute parent directory. The folder itself is always named after
+    the engagement and is created under that parent if it doesn't
+    already exist."""
+    parent = Path(parent_dir).expanduser()
+
+    if not parent.is_absolute():
+        print(f"[-] Parent directory must be an absolute path: {parent_dir}")
+        sys.exit(1)
+
+    if not parent.exists():
+        print(f"[-] Parent directory does not exist: {parent}")
+        sys.exit(1)
+
+    if not parent.is_dir():
+        print(f"[-] Not a directory: {parent}")
+        sys.exit(1)
+
+    box_dir = parent / engagement
+    box_dir.mkdir(parents=True, exist_ok=True)
+
+    return box_dir
+
+
+def setup(name, parent_dir):
     engagement = name.strip()
 
     if not engagement:
         print("[-] Engagement name cannot be empty.")
         sys.exit(1)
 
-    if directory:
-        box_dir = Path(directory).expanduser().resolve()
-
-        if not box_dir.exists():
-            print(f"[-] Directory does not exist: {box_dir}")
-            sys.exit(1)
-
-        if not box_dir.is_dir():
-            print(f"[-] Not a directory: {box_dir}")
-            sys.exit(1)
-    else:
-        box_dir = LOOT_DIR / engagement
-        box_dir.mkdir(parents=True, exist_ok=True)
+    box_dir = resolve_engagement_dir(engagement, parent_dir)
 
     config = load_config()
     config["engagements"][engagement] = str(box_dir)
@@ -129,7 +141,7 @@ def list_engagements():
     if not config["engagements"]:
         print("[*] No engagements configured.")
         print("    Run:")
-        print("    htb-creds setup <name> [directory]")
+        print("    htb-creds setup <name> <parent_dir>")
         return
 
     print("Configured engagements:\n")
@@ -205,16 +217,17 @@ def import_credentials(path_str, engagement_name=None, directory=None, switch=Tr
     config = load_config()
 
     if directory:
-        box_dir = Path(directory).expanduser().resolve()
+        # -d/--directory is the (required-absolute) PARENT dir, same as
+        # 'setup' - the engagement's own folder is created inside it
+        box_dir = resolve_engagement_dir(engagement, directory)
     elif engagement in config["engagements"]:
         # Already-known engagement: keep merging into its configured directory
         box_dir = Path(config["engagements"][engagement])
     else:
         # New engagement: manage the file where it already lives instead of
-        # copying it into ~/htb-creds/loot
+        # requiring a separate parent directory
         box_dir = source.parent
-
-    box_dir.mkdir(parents=True, exist_ok=True)
+        box_dir.mkdir(parents=True, exist_ok=True)
 
     config["engagements"][engagement] = str(box_dir)
 
@@ -261,7 +274,7 @@ def get_creds_file():
     if not current:
         print("[-] No engagement selected.")
         print("    Run:")
-        print("    htb-creds setup <name> [directory]")
+        print("    htb-creds setup <name> <parent_dir>")
         sys.exit(1)
 
     directory = config["engagements"].get(current)
@@ -461,7 +474,7 @@ def show_current():
     if not current:
         print("[-] No engagement selected.")
         print("    Run:")
-        print("    htb-creds setup <name> [directory]")
+        print("    htb-creds setup <name> <parent_dir>")
         sys.exit(1)
 
     creds_file = get_creds_file()
@@ -585,12 +598,14 @@ def main():
     )
 
     setup_parser.add_argument(
-        "directory",
-        nargs="?",
-        default=None,
+        "parent_dir",
+        metavar="parent_dir",
         help=(
-            "Directory in which htb_creds.json will be stored "
-            f"(defaults to a new directory under {LOOT_DIR})"
+            "Absolute path to the parent directory that will hold this "
+            "engagement's folder (e.g. /home/kali/fluffy/creds). A "
+            "subdirectory named after the engagement is created inside "
+            "it if it doesn't already exist, and htb_creds.json is "
+            "stored there. Required."
         ),
     )
 
@@ -631,11 +646,15 @@ def main():
     import_parser.add_argument(
         "-d",
         "--directory",
+        metavar="parent_dir",
         default=None,
         help=(
-            "Directory to manage this engagement's credentials in "
-            "(defaults to the imported file's own directory, or an "
-            "existing engagement's configured directory)"
+            "Absolute path to a parent directory to manage this "
+            "engagement's credentials under (same rule as 'setup': a "
+            "subdirectory named after the engagement is created inside "
+            "it). Defaults to the imported file's own directory for a "
+            "new engagement, or an existing engagement's configured "
+            "directory"
         ),
     )
 
@@ -651,7 +670,7 @@ def main():
         uninstall()
 
     elif args.command == "setup":
-        setup(args.name, args.directory)
+        setup(args.name, args.parent_dir)
 
     elif args.command == "use":
         use_engagement(args.name)
