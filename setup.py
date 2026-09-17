@@ -2,6 +2,7 @@
 
 import os
 import pwd
+import re
 import shutil
 import stat
 import sys
@@ -10,6 +11,11 @@ from pathlib import Path
 SCRIPT_NAME = "htb-creds.py"
 INSTALL_NAME = "htb-creds"
 INSTALL_DIR = Path("/usr/local/bin")
+
+
+def read_version(source):
+    match = re.search(r'^VERSION = "([^"]+)"', source.read_text(), re.MULTILINE)
+    return match.group(1) if match else "unknown"
 
 
 def resolve_target_user():
@@ -32,6 +38,7 @@ def main():
         sys.exit(1)
 
     destination = INSTALL_DIR / INSTALL_NAME
+    version = read_version(source)
 
     try:
         INSTALL_DIR.mkdir(parents=True, exist_ok=True)
@@ -44,7 +51,7 @@ def main():
         print(f"    sudo python3 {Path(__file__).name}")
         sys.exit(1)
 
-    print(f"[+] Installed htb-creds to {destination}")
+    print(f"[+] Installed htb-creds v{version} to {destination}")
 
     user = resolve_target_user()
     base_dir = Path(user.pw_dir) / "htb-creds"
@@ -60,9 +67,9 @@ def main():
     print(f"    configs: {configs_dir}")
 
     print("[+] Run this to configure your first engagement:")
-    print("    htb-creds setup <name> <parent_dir>")
-    print("    (parent_dir must be an absolute path; a subdirectory")
-    print("     named after the engagement is created inside it)")
+    print("    htb-creds setup <name> [dir]")
+    print("    (dir is an optional absolute parent directory, defaulting")
+    print("     to your home directory; <dir>/<name>/creds is created)")
 
 
 if __name__ == "__main__":

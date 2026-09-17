@@ -8,11 +8,18 @@ import shutil
 import sys
 from pathlib import Path
 
+VERSION = "0.9"
+
 BASE_DIR = Path.home() / "htb-creds"
 CONFIG_DIR = BASE_DIR / "configs"
 CONFIG_FILE = CONFIG_DIR / "config.json"
-CREDS_FILENAME = "htb_creds.json"
+CREDS_SUFFIX = "_htb_creds.json"
 INSTALLED_BINARY = Path("/usr/local/bin/htb-creds")
+
+
+def creds_filename(engagement):
+    return f"{engagement}{CREDS_SUFFIX}"
+
 
 FIELDS = [
     "host",
@@ -85,21 +92,37 @@ def resolve_engagement_dir(engagement, parent_dir):
     return box_dir
 
 
-def setup(name, parent_dir):
+def resolve_setup_dir(engagement, parent_dir=None):
+    """Resolve the per-engagement credentials folder as
+    <parent_dir>/<engagement>/creds, creating any missing directories
+    along the way. parent_dir defaults to the user's home directory."""
+    parent = Path(parent_dir).expanduser() if parent_dir else Path.home()
+
+    if not parent.is_absolute():
+        print(f"[-] Parent directory must be an absolute path: {parent_dir}")
+        sys.exit(1)
+
+    box_dir = parent / engagement / "creds"
+    box_dir.mkdir(parents=True, exist_ok=True)
+
+    return box_dir
+
+
+def setup(name, parent_dir=None):
     engagement = name.strip()
 
     if not engagement:
         print("[-] Engagement name cannot be empty.")
         sys.exit(1)
 
-    box_dir = resolve_engagement_dir(engagement, parent_dir)
+    box_dir = resolve_setup_dir(engagement, parent_dir)
 
     config = load_config()
     config["engagements"][engagement] = str(box_dir)
     config["current"] = engagement
     save_config(config)
 
-    creds_file = box_dir / CREDS_FILENAME
+    creds_file = box_dir / creds_filename(engagement)
 
     if not creds_file.exists():
         with creds_file.open("w") as f:
@@ -135,13 +158,58 @@ def use_engagement(name):
     print(f"    {config['engagements'][name]}")
 
 
+def delete_engagement(name, keep_files=False):
+    config = load_config()
+
+    if name not in config["engagements"]:
+        print(f"[-] Unknown engagement: {name}")
+        print("    Run 'htb-creds --engagements' to see configured engagements.")
+        sys.exit(1)
+
+    box_dir = Path(config["engagements"][name])
+    creds_file = box_dir / creds_filename(name)
+
+    if not keep_files and creds_file.exists():
+        print("[!] This will permanently delete:")
+        print(f"    {creds_file}")
+
+        answer = input(f"Delete engagement '{name}'? [y/N] ").strip().lower()
+
+        if answer != "y":
+            print("[*] Delete cancelled.")
+            return
+
+        creds_file.unlink()
+        print(f"[+] Removed {creds_file}")
+
+        try:
+            box_dir.rmdir()
+        except OSError:
+            pass
+
+    del config["engagements"][name]
+
+    if config.get("current") == name:
+        config["current"] = None
+
+    save_config(config)
+
+    print(f"[+] Engagement '{name}' removed.")
+
+    if config.get("current") is None:
+        if config["engagements"]:
+            print("    Run 'htb-creds use <name>' to switch to another engagement.")
+        else:
+            print("    No engagements remain. Run 'htb-creds setup <name> [dir]' to create one.")
+
+
 def list_engagements():
     config = load_config()
 
     if not config["engagements"]:
         print("[*] No engagements configured.")
         print("    Run:")
-        print("    htb-creds setup <name> <parent_dir>")
+        print("    htb-creds setup <name> [dir]")
         return
 
     print("Configured engagements:\n")
@@ -217,8 +285,8 @@ def import_credentials(path_str, engagement_name=None, directory=None, switch=Tr
     config = load_config()
 
     if directory:
-        # -d/--directory is the (required-absolute) PARENT dir, same as
-        # 'setup' - the engagement's own folder is created inside it
+        # -d/--directory is the (required-absolute) PARENT dir - the
+        # engagement's own folder is created inside it
         box_dir = resolve_engagement_dir(engagement, directory)
     elif engagement in config["engagements"]:
         # Already-known engagement: keep merging into its configured directory
@@ -236,7 +304,7 @@ def import_credentials(path_str, engagement_name=None, directory=None, switch=Tr
 
     save_config(config)
 
-    creds_file = box_dir / CREDS_FILENAME
+    creds_file = box_dir / creds_filename(engagement)
     existing = []
 
     if creds_file.exists() and creds_file != source:
@@ -274,7 +342,7 @@ def get_creds_file():
     if not current:
         print("[-] No engagement selected.")
         print("    Run:")
-        print("    htb-creds setup <name> <parent_dir>")
+        print("    htb-creds setup <name> [dir]")
         sys.exit(1)
 
     directory = config["engagements"].get(current)
@@ -290,7 +358,7 @@ def get_creds_file():
         print(f"    {box_dir}")
         sys.exit(1)
 
-    return box_dir / CREDS_FILENAME
+    return box_dir / creds_filename(current)
 
 
 def load_creds():
@@ -413,7 +481,10 @@ def edit_credential(arguments):
 
 
 def list_credentials():
+    config = load_config()
     creds = load_creds()
+
+    print(f"Current engagement: {config.get('current')}")
 
     if not creds:
         print("[*] No credentials stored.")
@@ -474,7 +545,7 @@ def show_current():
     if not current:
         print("[-] No engagement selected.")
         print("    Run:")
-        print("    htb-creds setup <name> <parent_dir>")
+        print("    htb-creds setup <name> [dir]")
         sys.exit(1)
 
     creds_file = get_creds_file()
@@ -503,16 +574,48 @@ def uninstall():
 
     user = resolve_target_user()
     base_dir = Path(user.pw_dir) / "htb-creds"
+    config_file = base_dir / "configs" / "config.json"
+
+    engagements = {}
+
+    if config_file.exists():
+        try:
+            with config_file.open() as f:
+                engagements = json.load(f).get("engagements", {})
+        except (json.JSONDecodeError, OSError):
+            pass
 
     print("[!] This will permanently delete:")
-    print(f"    {base_dir} (all engagements and stored credentials)")
+    print(f"    {base_dir} (engagement configuration)")
     print(f"    {INSTALLED_BINARY}")
+
+    if engagements:
+        print("    Credential files for these engagements:")
+
+        for engagement, directory in engagements.items():
+            print(f"      {Path(directory) / creds_filename(engagement)}")
+    else:
+        print("    (no registered engagements found; any credential files")
+        print("     outside a registered engagement's directory are left alone)")
 
     answer = input("Uninstall htb-creds? [y/N] ").strip().lower()
 
     if answer != "y":
         print("[*] Uninstall cancelled.")
         return
+
+    for engagement, directory in engagements.items():
+        box_dir = Path(directory)
+        creds_file = box_dir / creds_filename(engagement)
+
+        if creds_file.exists():
+            creds_file.unlink()
+            print(f"[+] Removed {creds_file}")
+
+            try:
+                box_dir.rmdir()
+            except OSError:
+                pass
 
     if base_dir.exists():
         shutil.rmtree(base_dir)
@@ -528,6 +631,12 @@ def uninstall():
 def main():
     parser = argparse.ArgumentParser(
         description="Simple HTB credential manager"
+    )
+
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"htb-creds v{VERSION}",
     )
 
     parser.add_argument(
@@ -598,14 +707,16 @@ def main():
     )
 
     setup_parser.add_argument(
-        "parent_dir",
-        metavar="parent_dir",
+        "dir",
+        metavar="dir",
+        nargs="?",
+        default=None,
         help=(
-            "Absolute path to the parent directory that will hold this "
-            "engagement's folder (e.g. /home/kali/fluffy/creds). A "
-            "subdirectory named after the engagement is created inside "
-            "it if it doesn't already exist, and htb_creds.json is "
-            "stored there. Required."
+            "Absolute path to the parent directory under which this "
+            "engagement's folder is created (e.g. /home/kali/HTB-boxes). "
+            "A subdirectory <dir>/<name>/creds is created if it doesn't "
+            "already exist, and <name>_htb_creds.json is stored there. "
+            "Defaults to your home directory."
         ),
     )
 
@@ -617,6 +728,25 @@ def main():
     use_parser.add_argument(
         "name",
         help="Name of the engagement to switch to",
+    )
+
+    delete_parser = subparsers.add_parser(
+        "delete",
+        help="Delete a configured engagement",
+    )
+
+    delete_parser.add_argument(
+        "name",
+        help="Name of the engagement to delete",
+    )
+
+    delete_parser.add_argument(
+        "--keep-files",
+        action="store_true",
+        help=(
+            "Only remove the engagement from configuration; leave its "
+            "credential file on disk"
+        ),
     )
 
     import_parser = subparsers.add_parser(
@@ -650,11 +780,10 @@ def main():
         default=None,
         help=(
             "Absolute path to a parent directory to manage this "
-            "engagement's credentials under (same rule as 'setup': a "
-            "subdirectory named after the engagement is created inside "
-            "it). Defaults to the imported file's own directory for a "
-            "new engagement, or an existing engagement's configured "
-            "directory"
+            "engagement's credentials under (a subdirectory named after "
+            "the engagement is created inside it). Defaults to the "
+            "imported file's own directory for a new engagement, or an "
+            "existing engagement's configured directory"
         ),
     )
 
@@ -670,10 +799,13 @@ def main():
         uninstall()
 
     elif args.command == "setup":
-        setup(args.name, args.parent_dir)
+        setup(args.name, args.dir)
 
     elif args.command == "use":
         use_engagement(args.name)
+
+    elif args.command == "delete":
+        delete_engagement(args.name, keep_files=args.keep_files)
 
     elif args.command == "import":
         import_credentials(
